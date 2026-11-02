@@ -2048,6 +2048,168 @@ async function cambiarTipoMovimientoFinanza(tipo) {
         });
     };
 
+
+// ================================================================
+// MODALES Y REPORTE FINANCIERO
+// ================================================================
+
+    // Abrir / Cerrar Modales de Reporte
+// Procesar y Calcular Reporte Financiero
+// ================================================================
+// MODALES Y REPORTE FINANCIERO
+// ================================================================
+
+window.abrirModalConfigReporte = function() {
+    const hoy = new Date();
+    const mesActual = hoy.getFullYear() + '-' + String(hoy.getMonth() + 1).padStart(2, '0');
+    const inputMes = document.getElementById('rep-mes-anio');
+    if (inputMes) inputMes.value = mesActual;
+    
+    const modalConfig = document.getElementById('modal-config-reporte');
+    if (modalConfig) modalConfig.classList.remove('hidden');
+};
+
+window.cerrarModalConfigReporte = function() {
+    const modalConfig = document.getElementById('modal-config-reporte');
+    if (modalConfig) modalConfig.classList.add('hidden');
+};
+
+window.cerrarVistaReporte = function() {
+    const vistaRep = document.getElementById('modal-vista-reporte');
+    if (vistaRep) vistaRep.classList.add('hidden');
+};
+
+window.procesarReporteFinanciero = async function(e) {
+    e.preventDefault();
+    const periodo = document.getElementById('rep-mes-anio').value;
+    const modalidad = document.querySelector('input[name="rep-tipo"]:checked').value;
+    
+    if (!periodo) return;
+
+    const [anioStr, mesStr] = periodo.split('-');
+    const anio = parseInt(anioStr);
+    const mes = parseInt(mesStr);
+
+    const fechaInicioMes = new Date(anio, mes - 1, 1).toISOString().split('T')[0];
+    const fechaFinMes = new Date(anio, mes, 0, 23, 59, 59).toISOString().split('T')[0];
+
+    try {
+        const [
+            { data: cobros },
+            { data: gastos },
+            { data: pagosProv },
+            { data: pagosEmp }
+        ] = await Promise.all([
+            supabaseClient.from('pagocliente').select('*'),
+            supabaseClient.from('gasto').select('*'),
+            supabaseClient.from('pagoproveedor').select('*'),
+            supabaseClient.from('pagoempleado').select('*')
+        ]);
+
+        let saldoInicial = 0;
+        let ingresosMes = 0;
+        let egresosGastos = 0;
+        let egresosProv = 0;
+        let egresosEmp = 0;
+
+        (cobros || []).forEach(item => {
+            const f = item.fechapago || item.fecha || item.created_at;
+            if (!f) return;
+            const itemFecha = f.split('T')[0];
+            const monto = parseFloat(item.montopen || item.monto || 0);
+
+            if (modalidad === 'con-anteriores' && itemFecha < fechaInicioMes) {
+                saldoInicial += monto;
+            } else if (itemFecha >= fechaInicioMes && itemFecha <= fechaFinMes) {
+                ingresosMes += monto;
+            }
+        });
+
+        const procesarEgresos = (lista, campoFecha, campoMonto, callbackAcumulador) => {
+            (lista || []).forEach(item => {
+                const f = item[campoFecha] || item.fechapago || item.fecha || item.created_at;
+                if (!f) return;
+                const itemFecha = f.split('T')[0];
+                const monto = parseFloat(item[campoMonto] || item.montopen || item.monto || 0);
+
+                if (modalidad === 'con-anteriores' && itemFecha < fechaInicioMes) {
+                    saldoInicial -= monto;
+                } else if (itemFecha >= fechaInicioMes && itemFecha <= fechaFinMes) {
+                    callbackAcumulador(monto);
+                }
+            });
+        };
+
+        procesarEgresos(gastos, 'fechagasto', 'montopengasto', (m) => egresosGastos += m);
+        procesarEgresos(pagosProv, 'fechapago', 'montopen', (m) => egresosProv += m);
+        procesarEgresos(pagosEmp, 'fechapago', 'montopen', (m) => egresosEmp += m);
+
+        const totalEgresosMes = egresosGastos + egresosProv + egresosEmp;
+        const balanceMes = ingresosMes - totalEgresosMes;
+        const balanceTotal = modalidad === 'con-anteriores' ? (saldoInicial + balanceMes) : balanceMes;
+
+        const mesesNombre = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+        const nombreMesStr = `${mesesNombre[mes - 1]} ${anio}`;
+
+        document.getElementById('rep-titulo-periodo').innerText = `Periodo: ${nombreMesStr} | Modalidad: ${modalidad === 'con-anteriores' ? 'Con datos anteriores (Arrastre)' : 'Solo mes'}`;
+
+        let htmlResumen = `
+            ${modalidad === 'con-anteriores' ? `
+                <div class="p-4 bg-amber-50 rounded-xl border border-amber-200 mb-4 flex justify-between items-center">
+                    <span class="text-xs font-bold text-amber-800 uppercase">Saldo Inicial Acumulado (Meses Anteriores):</span>
+                    <span class="text-sm font-extrabold text-amber-900">S/ ${saldoInicial.toFixed(2)}</span>
+                </div>
+            ` : ''}
+
+            <div class="grid grid-cols-3 gap-4 mb-6">
+                <div class="p-4 bg-emerald-50 rounded-xl border border-emerald-200">
+                    <p class="text-xs font-semibold text-emerald-600 uppercase">Ingresos del Mes</p>
+                    <p class="text-lg font-bold text-emerald-700">S/ ${ingresosMes.toFixed(2)}</p>
+                </div>
+                <div class="p-4 bg-rose-50 rounded-xl border border-rose-200">
+                    <p class="text-xs font-semibold text-rose-600 uppercase">Egresos del Mes</p>
+                    <p class="text-lg font-bold text-rose-700">S/ ${totalEgresosMes.toFixed(2)}</p>
+                </div>
+                <div class="p-4 bg-blue-50 rounded-xl border border-blue-200">
+                    <p class="text-xs font-semibold text-blue-600 uppercase">Balance ${modalidad === 'con-anteriores' ? 'Final en Caja' : 'del Mes'}</p>
+                    <p class="text-lg font-bold ${balanceTotal >= 0 ? 'text-blue-700' : 'text-rose-700'}">S/ ${balanceTotal.toFixed(2)}</p>
+                </div>
+            </div>
+
+            <h4 class="text-xs font-bold text-gray-700 uppercase mb-2">Desglose de Salidas del Mes</h4>
+            <table class="w-full text-xs text-left text-gray-600 border border-gray-200 rounded-lg overflow-hidden">
+                <thead class="bg-gray-100 uppercase text-gray-500 font-bold">
+                    <tr>
+                        <th class="p-2.5">Categoría de Egreso</th>
+                        <th class="p-2.5 text-right">Monto Total</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    <tr><td class="p-2.5">Gastos Operativos de Sede</td><td class="p-2.5 text-right font-semibold text-gray-800">S/ ${egresosGastos.toFixed(2)}</td></tr>
+                    <tr><td class="p-2.5">Pagos a Proveedores de Materiales</td><td class="p-2.5 text-right font-semibold text-gray-800">S/ ${egresosProv.toFixed(2)}</td></tr>
+                    <tr><td class="p-2.5">Nómina y Pagos a Empleados</td><td class="p-2.5 text-right font-semibold text-gray-800">S/ ${egresosEmp.toFixed(2)}</td></tr>
+                </tbody>
+            </table>
+        `;
+
+        document.getElementById('rep-contenido-detallado').innerHTML = htmlResumen;
+
+        cerrarModalConfigReporte();
+        document.getElementById('modal-vista-reporte').classList.remove('hidden');
+
+    } catch (err) {
+        console.error("Error al generar reporte financiero:", err);
+        alert("Ocurrió un error al consultar los datos financieros.");
+    }
+};
+
+
+
+
+
+
+
+
     // ================================================================
     // EVENTOS Y FORMULARIOS
     // ================================================================
